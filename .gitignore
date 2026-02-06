@@ -1,0 +1,23 @@
+# --- Python & Environnement Virtuel ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# --- IDE (PyCharm / VSCode) ---
+.idea/
+.vscode/
+
+# --- Système (Mac / Windows) ---
+.DS_Store
+Thumbs.db
+
+# --- PROJET MON ECC (Clés générées) ---
+# Ignore toutes les clés privées et publiques générées
+*.priv
+*.pub
+
+# Ignore spécifiquement les fichiers par défaut
+monECC.priv
+monECC.pub
