@@ -84,14 +84,14 @@ def double_and_add(k, point=None):
     return result
 
 
-def keygen(filename_base="monECC"):
+def keygen(filename_base="monECC", max_size=1000):
     attempts = 0
     max_attempts = 10000
     k = None
     Q = None
 
     while attempts < max_attempts:
-        k = random.randint(1, 1000)
+        k = random.randint(1, max_size)
         Q = double_and_add(k)
 
         if Q is not None and isinstance(Q, tuple) and len(Q) == 2:
@@ -100,7 +100,7 @@ def keygen(filename_base="monECC"):
                 break
         attempts += 1
 
-    if Q is None or attempts >= max_attempts:
+    if Q is None:
         return
 
     priv_content = f"---begin monECC private key---\n"
@@ -168,11 +168,22 @@ def derive_keys_from_secret(secret_point):
     return key, iv
 
 
-def crypt(target_key_name, message, sender_keys_name="monECC"):
-    Qb = read_public_key(f"{target_key_name}.pub")
+def crypt(target_key_name, message_or_file, sender_keys_name="monECC", input_is_file=False, output_file=None):
+    message = ""
+    if input_is_file:
+        try:
+            with open(message_or_file, 'r', encoding='utf-8') as f:
+                message = f.read()
+        except Exception as e:
+            print(f"Erreur lecture fichier d'entrée : {e}")
+            return
+    else:
+        message = message_or_file
+
+    target_file = f"{target_key_name}.pub"
+    Qb = read_public_key(target_file)
 
     my_priv_file = f"{sender_keys_name}.priv"
-
     k_sender = None
     Q_sender = None
 
@@ -189,7 +200,11 @@ def crypt(target_key_name, message, sender_keys_name="monECC"):
 
     S = double_and_add(k_sender, Qb)
 
-    aes_key, iv = derive_keys_from_secret(S)
+    try:
+        aes_key, iv = derive_keys_from_secret(S)
+    except ValueError:
+        print("Erreur Mathématique : Secret à l'infini. Changez de clés.")
+        sys.exit(1)
 
     padder = padding.PKCS7(128).padder()
     padded_data = padder.update(message.encode('utf-8')) + padder.finalize()
@@ -198,12 +213,33 @@ def crypt(target_key_name, message, sender_keys_name="monECC"):
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(padded_data) + encryptor.finalize()
 
-    output = f"{Q_sender[0]}:{Q_sender[1]}:{ciphertext.hex()}"
-    print(output)
+    output_data = f"{Q_sender[0]}:{Q_sender[1]}:{ciphertext.hex()}"
+
+    if output_file:
+        try:
+            with open(output_file, 'w') as f:
+                f.write(output_data)
+            print(f"Message chiffré écrit dans : {output_file}")
+        except Exception as e:
+            print(f"Erreur écriture fichier sortie : {e}")
+    else:
+        print(output_data)
 
 
-def decrypt(key_name, encrypted_package):
-    k = read_private_key(f"{key_name}.priv")
+def decrypt(key_name, content_or_file, input_is_file=False, output_file=None):
+    encrypted_package = ""
+    if input_is_file:
+        try:
+            with open(content_or_file, 'r') as f:
+                encrypted_package = f.read().strip()  # .strip() important pour virer les retours ligne
+        except Exception as e:
+            print(f"Erreur lecture fichier d'entrée : {e}")
+            return
+    else:
+        encrypted_package = content_or_file
+
+    priv_file = f"{key_name}.priv"
+    k = read_private_key(priv_file)
 
     try:
         parts = encrypted_package.strip().split(':')
@@ -235,24 +271,37 @@ def decrypt(key_name, encrypted_package):
         unpadder = padding.PKCS7(128).unpadder()
         plaintext = unpadder.update(padded_data) + unpadder.finalize()
 
-        print(f"Message déchiffré : {plaintext.decode('utf-8')}")
+        plaintext_str = plaintext.decode('utf-8')
+
+        if output_file:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(plaintext_str)
+            print(f"Message déchiffré écrit dans : {output_file}")
+        else:
+            print(f"Message déchiffré : {plaintext_str}")
+
     except Exception as e:
         print(f"Échec du déchiffrement.")
 
 
 def print_help():
     print("""
-    Script monECC
-    Syntaxe: python monECC.py <commande> [<nom_clé>] [<texte>] [switchs]
-
-    Commandes:
-      keygen            : Génère une paire de clés (nom_clé.priv, nom_clé.pub)
-      crypt <nom> <msg> : Chiffre <msg> pour la clé publique <nom>.pub
-      decrypt <nom> <c> : Déchiffre <c> avec la clé privée <nom>.priv
-      help              : Affiche ce manuel
-
-    Switchs:
-      -f <file>         : Nom de base des fichiers de l'expéditeur (pour keygen et crypt)
+        Script monECC par Alexy
+        Syntaxe :
+            monECC <commande> [<clé>] [<texte>] [switchs]
+        Commande :
+            keygen : Génère une paire de clé
+            crytp : Chiffre <texte> pour la clé publique <clé>
+            decrytp: Déchiffre <texte> pour la clé privée <clé>
+            help : Affiche ce manuel
+        Clé :
+            Un fichier qui contient une clé publique monECC ("crypt") ou une clé
+            privée ("decrypt")
+        Texte :
+            Une phrase en clair ("crypt") ou une phrase chiffrée ("decrypt")
+        Switchs :
+            -f <file> permet de choisir le nom des clé générés, monECC.pub et
+            monECC.priv par défaut
     """)
 
 
@@ -262,29 +311,86 @@ def main():
         return
 
     command = sys.argv[1]
-    args = sys.argv[2:]
+    raw_args = sys.argv[2:]
 
-    filename = "monECC"
-    if "-f" in args:
-        idx = args.index("-f")
-        if idx + 1 < len(args):
-            filename = args[idx + 1]
-            del args[idx:idx + 2]
+    options = {
+        'f': "monECC",
+        's': 1000,
+        'i': None,
+        'o': None
+    }
+
+    clean_args = []
+
+    skip_next = False
+    for i in range(len(raw_args)):
+        if skip_next:
+            skip_next = False
+            continue
+
+        arg = raw_args[i]
+
+        if arg == "-f" and i + 1 < len(raw_args):
+            options['f'] = raw_args[i + 1]
+            skip_next = True
+        elif arg == "-s" and i + 1 < len(raw_args):
+            try:
+                options['s'] = int(raw_args[i + 1])
+            except:
+                print("Erreur: -s doit être suivi d'un entier.")
+                return
+            skip_next = True
+        elif arg == "-i" and i + 1 < len(raw_args):
+            options['i'] = raw_args[i + 1]
+            skip_next = True
+        elif arg == "-o" and i + 1 < len(raw_args):
+            options['o'] = raw_args[i + 1]
+            skip_next = True
+        else:
+            clean_args.append(arg)
 
     if command == "keygen":
-        keygen(filename)
+        keygen(options['f'], options['s'])
 
     elif command == "crypt":
-        if len(args) < 2:
-            print("Erreur: crypt nécessite <nom_clé> <texte>")
+        if len(clean_args) < 1:
+            print("Erreur: crypt nécessite au moins le nom du destinataire.")
             return
-        crypt(args[0], args[1], filename)
+
+        target_name = clean_args[0]
+
+        input_is_file = False
+
+        if options['i']:
+            message_input = options['i']
+            input_is_file = True
+        else:
+            if len(clean_args) < 2:
+                print("Erreur: crypt nécessite un message (ou l'option -i).")
+                return
+            message_input = clean_args[1]
+
+        crypt(target_name, message_input, options['f'], input_is_file, options['o'])
 
     elif command == "decrypt":
-        if len(args) < 2:
-            print("Erreur: decrypt nécessite <nom_clé> <message_chiffré>")
+        if len(clean_args) < 1:
+            print("Erreur: decrypt nécessite au moins le nom de votre clé.")
             return
-        decrypt(args[0], args[1])
+
+        my_key_name = clean_args[0]
+
+        input_is_file = False
+
+        if options['i']:
+            cipher_input = options['i']
+            input_is_file = True
+        else:
+            if len(clean_args) < 2:
+                print("Erreur: decrypt nécessite le cryptogramme (ou l'option -i).")
+                return
+            cipher_input = clean_args[1]
+
+        decrypt(my_key_name, cipher_input, input_is_file, options['o'])
 
     else:
         print(f"Commande inconnue : {command}")
